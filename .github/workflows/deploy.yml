@@ -62,7 +62,7 @@ jobs:
         env:
           IMAGE: ${{ env.IMAGE }}
 
-      # Pull on EC2 and replace the running container
+      # Pull on EC2, replace the container, then GET /health; rollback to prior image if check fails
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -72,6 +72,7 @@ jobs:
           envs: IMAGE,GHCR_PAT,GHCR_USER
           script: |
             set -e
+            OLD_IMAGE=$(sudo docker inspect -f '{{.Config.Image}}' kora 2>/dev/null || true)
             if [ -n "$GHCR_PAT" ] && [ -n "$GHCR_USER" ]; then
               echo "$GHCR_PAT" | sudo docker login ghcr.io -u "$GHCR_USER" --password-stdin
             fi
@@ -79,6 +80,19 @@ jobs:
             sudo docker stop kora 2>/dev/null || true
             sudo docker rm kora 2>/dev/null || true
             sudo docker run -d --name kora --restart unless-stopped -p 80:3000 -e PORT=3000 "$IMAGE"
+            sleep 3
+            if ! curl -sf --connect-timeout 5 --max-time 15 "http://127.0.0.1/health" > /dev/null; then
+              echo "POST_DEPLOY_HEALTH_FAILED: rolling back to previous image if it existed."
+              sudo docker stop kora 2>/dev/null || true
+              sudo docker rm kora 2>/dev/null || true
+              if [ -n "$OLD_IMAGE" ]; then
+                sudo docker run -d --name kora --restart unless-stopped -p 80:3000 -e PORT=3000 "$OLD_IMAGE"
+                echo "Rollback to $OLD_IMAGE started; check EC2. Deploy step still fails so CI reports the bad release."
+              else
+                echo "No previous container image to roll back to."
+              fi
+              exit 1
+            fi
         env:
           IMAGE: ${{ env.IMAGE }}
           GHCR_PAT: ${{ secrets.GHCR_PAT }}
