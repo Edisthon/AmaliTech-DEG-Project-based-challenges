@@ -9,11 +9,10 @@ COPY app/ ./
 
 RUN chown -R node:node /app
 
-USER root
+USER node
 
 EXPOSE 3000
 
 ENV NODE_ENV=production
 
-CMD ["sh", "-c", "echo 'no server on 3000' && sleep 3600"]
-
+CMD ["node", "index.js"]
