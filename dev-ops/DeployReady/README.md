@@ -1,140 +1,77 @@
-# DeployReady
+# Kora API — container, CI/CD, and AWS (DeployReady)
 
-This challenge is designed to test your understanding of core DevOps practices: containerisation, automated pipelines, and cloud deployment.
+**Kora Analytics** (challenge scenario) needs the Node API in [app/](app/) delivered as a **container**, built and tested in **GitHub Actions**, and run on **AWS EC2** behind a public **HTTP** endpoint.
 
----
-
-## 1. Business Context
-
-**Client:** Kora Analytics
-**Industry:** SaaS — Data dashboards for logistics companies
-
-### The Problem
-
-Every time the Kora team wants to deploy a new version of their app, a developer manually SSHs into the server, pulls the code, and restarts the process by hand. There are no automated tests before a release and no way to tell if a deploy broke something until a customer complains.
-
-### Your Role
-
-You are joining as their first DevOps engineer. The application code already works — your job is to **containerise it, automate the delivery pipeline, and get it running on AWS**.
+This README is the submission **architecture and operator guide** for this folder. Step-by-step AWS and troubleshooting notes are in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ---
 
-## 2. The Application
+## Architecture
 
-A simple Node.js API is provided in the [`app/`](./app/) directory. It has three endpoints:
+1. **Developers** push to `main`.
+2. **GitHub Actions** runs `npm test`, builds a **Docker** image, tags it with the **commit SHA**, and pushes to **GitHub Container Registry (GHCR)**.
+3. The workflow **SSHs to EC2** (secrets: host, user, private key) and runs `docker pull` and `docker run` for container **`kora`** on **host port 80** → app port **3000**.
+4. A **post-deploy** request to `http://127.0.0.1/health` on the server validates the release. If it fails, the script **rolls back** to the image that was running before (see [DEPLOYMENT.md — §9](DEPLOYMENT.md#9-bonus-rollback-in-the-pipeline); **how we tested** this is in [§9.1](DEPLOYMENT.md#91-how-we-tested-rollback-what-we-did)).
 
-| Method | Route      | Description                            |
-| ------ | ---------- | -------------------------------------- |
-| GET    | `/health`  | Returns `{ "status": "ok" }`           |
-| GET    | `/metrics` | Returns uptime and memory usage        |
-| POST   | `/data`    | Accepts a JSON body and echoes it back |
+**Why this shape**
 
-Run it locally:
+- **SHA tags** make production images **immutable** and traceable to Git.
+- **Tests before deploy** stop broken code from being built for production (at least in the same pipeline).
+- **GHCR** avoids storing AWS ECR keys in the repo; only GitHub and optional PAT for private pulls.
+- **Rollback** is a practical bonus: bad containers do not stay live without a clear CI failure.
+
+---
+
+## Repository map (this challenge)
+
+| Path | Purpose |
+|------|---------|
+| [app/](app/) | Node.js API (unchanged app logic; tests in-repo). |
+| [Dockerfile](Dockerfile) | Production image; non-root user; `PORT` env. |
+| [docker-compose.yml](docker-compose.yml) + [.env.example](.env.example) | Local run on port 3000. |
+| [.github/workflows/deploy.yml](../../.github/workflows/deploy.yml) | Pipeline (repo root; `DEPLOY_ROOT` points here). |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | EC2, security group, secrets, issues we hit, and bonus rollback. |
+
+---
+
+## Run locally
 
 ```bash
-cd app
-npm install
-npm start
+cd app && npm install && npm test
 ```
 
-Do not change the application logic. Your work is everything around it.
+With Docker (from this directory):
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Open `http://localhost:3000/health` — expect `{"status":"ok"}`.
 
 ---
 
-## 3. The Assignment
+## Cloud checklist (before you submit)
 
-### Part 1 — Containerise the App
+- [ ] `docker compose up --build` works locally; `.env` is **not** committed.
+- [ ] GitHub **Actions** shows a **green** run on `main` (test → build+push → deploy).
+- [ ] `GET http://<ec2-public-ip>/health` returns **200** and JSON with `"ok"`.
+- [ ] **SSH** in the security group is **not** `0.0.0.0/0` (HTTP **may** be `0.0.0.0/0`).
+- [ ] No `.pem` or API tokens in Git — only in **GitHub → Settings → Secrets**.
+- [ ] [DEPLOYMENT.md](DEPLOYMENT.md) is filled in for your environment.
 
-**Deliverables:** A `Dockerfile` and a `docker-compose.yml` in the root of your repository.
-
-**Dockerfile requirements:**
-
-- The app must run inside a Docker container.
-- The container must accept a `PORT` environment variable.
-- The container must **not** run as the `root` user.
-
-**Docker Compose requirements:**
-
-- Define the app as a service in `docker-compose.yml`.
-- Map port `3000` on the host to the container.
-- Pass the `PORT` variable via an `.env` file (include a `.env.example` with placeholder values).
-- Running the following must start a working API:
-  ```bash
-  docker compose up --build
-  ```
+**Submission:** submit your fork’s URL via the [AmaliTech form](https://forms.cloud.microsoft.com/e/f3FF83LVz3) as required by the program.
 
 ---
 
-### Part 2 — Automate the Pipeline
+## Glossary (quick)
 
-**Deliverable:** A `.github/workflows/deploy.yml` GitHub Actions workflow.
+| Term | Meaning |
+|------|--------|
+| **CI** | Automated test/build on every change (here: GitHub Actions on `main`). |
+| **CD** | Delivering the build to a server (here: pull new image on EC2 and restart the container). |
+| **CIDR** | IP range used in firewall rules, e.g. `203.0.113.0/32` for a single address. |
+| **GHCR** | GitHub’s container registry; image URL `ghcr.io/<owner>/<repo>/...`. |
+| **Security group** | EC2’s inbound/outbound access rules. |
 
-The pipeline must run these steps **in order** on every push to `main`:
-
-1. **Test** — Run `npm test`. If tests fail, the pipeline stops. Nothing gets deployed.
-2. **Build** — Build the Docker image and tag it with the Git commit SHA.
-3. **Push** — Push the image to a container registry (GitHub Container Registry or AWS ECR).
-4. **Deploy** — Pull the new image on the EC2 server and restart the container.
-
-Additional requirements:
-
-- Secrets (SSH key, registry token) must be stored as **GitHub repository secrets** — never in the code.
-- Add a short comment above each step in the YAML explaining what it does.
-
----
-
-### Part 3 — Deploy to AWS
-
-**Deliverable:** A running service on AWS and a short `DEPLOYMENT.md` explaining your setup.
-
-Provision the following manually (via the AWS Console is fine):
-
-- An **EC2 instance** (`t2.micro`, Amazon Linux 2023) with Docker installed.
-- A **Security Group** that allows:
-  - HTTP on port 80 from anywhere
-  - SSH on port 22 **from your IP only** — not `0.0.0.0/0`
-- An **IAM user or role** for the pipeline with only the permissions it needs.
-
-At submission time, `GET http://<your-ec2-ip>/health` must return `{ "status": "ok" }`.
-
-Document in `DEPLOYMENT.md`:
-
-- How you set up the EC2 instance
-- How you installed Docker and pulled your image
-- How to check if the container is running
-- How to view the application logs
-
----
-
-## 4. Bonus (Optional)
-
-Pick **one** of the following if you want to go further:
-
-- **Use Terraform** to provision the EC2 instance and Security Group instead of the console.
-- **Add a CloudWatch alarm** that triggers if `/health` stops responding.
-- **Implement a rollback step** in the pipeline that re-deploys the previous image if the health check fails after deploy.
-
-Describe what you added and why in your `DEPLOYMENT.md`.
-
----
-
-## 5. Submission Instructions
-
-1. **Fork** this repository.
-2. Complete all three parts in your fork.
-3. **Replace this README** with your own documentation (architecture overview, setup steps, decisions made).
-4. Submit your repo link via the [online form](https://forms.cloud.microsoft/e/f3FF83LVz3).
-
----
-
-## ⚠️ Pre-Submission Checklist
-
-- [ ] `docker compose up --build` starts the app locally
-- [ ] A `.env.example` file is committed (the real `.env` is not)
-- [ ] At least one successful pipeline run is visible in the GitHub Actions tab
-- [ ] `GET /health` on your EC2 public IP returns 200
-- [ ] No secrets or `.pem` files committed to the repository
-- [ ] SSH port 22 is **not** open to `0.0.0.0/0`
-- [ ] `DEPLOYMENT.md` is present and covers the four points in Part 3
-- [ ] This README has been replaced with your own documentation
-- [ ] Commit history shows progress over time (not a single upload commit)
+For longer explanations and the problems we hit in practice, see [DEPLOYMENT.md](DEPLOYMENT.md).
