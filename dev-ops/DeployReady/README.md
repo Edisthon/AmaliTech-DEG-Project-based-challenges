@@ -1,40 +1,42 @@
 # Kora API — container, CI/CD, and AWS (DeployReady)
 
-**Kora Analytics** (challenge scenario) needs the Node API in [app/](app/) delivered as a **container**, built and tested in **GitHub Actions**, and run on **AWS EC2** behind a public **HTTP** endpoint.
+## Context
 
-This README is the submission **architecture and operator guide** for this folder. Step-by-step AWS and troubleshooting notes are in [DEPLOYMENT.md](DEPLOYMENT.md).
+Kora’s Node API in [app/](app/) runs in Docker, gets built and tested on every push to `main` in GitHub Actions, and is deployed to an **EC2** instance on AWS. The course brief also allows other clouds; I used **EC2** and **GitHub Container Registry (GHCR)** because that matched the path I was following and worked well with SSH-based deploys.
 
----
-
-## Architecture
-
-1. **Developers** push to `main`.
-2. **GitHub Actions** runs `npm test`, builds a **Docker** image, tags it with the **commit SHA**, and pushes to **GitHub Container Registry (GHCR)**.
-3. The workflow **SSHs to EC2** (secrets: host, user, private key) and runs `docker pull` and `docker run` for container **`kora`** on **host port 80** → app port **3000**.
-4. A **post-deploy** request to `http://127.0.0.1/health` on the server validates the release. If it fails, the script **rolls back** to the image that was running before (see [DEPLOYMENT.md — §9](DEPLOYMENT.md#9-bonus-rollback-in-the-pipeline); **how we tested** this is in [§9.1](DEPLOYMENT.md#91-how-we-tested-rollback-what-we-did)).
-
-**Why this shape**
-
-- **SHA tags** make production images **immutable** and traceable to Git.
-- **Tests before deploy** stop broken code from being built for production (at least in the same pipeline).
-- **GHCR** avoids storing AWS ECR keys in the repo; only GitHub and optional PAT for private pulls.
-- **Rollback** is a practical bonus: bad containers do not stay live without a clear CI failure.
+[DEPLOYMENT.md](DEPLOYMENT.md) has the full setup (security group, secrets, checklists) with **inline screenshots** next to the section they match—GitHub Actions with the stack overview, the EC2 security group, SSH + Docker on the instance, rollback, and a failed deploy example.
 
 ---
 
-## Repository map (this challenge)
+## How the pipeline works
 
-| Path | Purpose |
-|------|---------|
-| [app/](app/) | Node.js API (unchanged app logic; tests in-repo). |
-| [Dockerfile](Dockerfile) | Production image; non-root user; `PORT` env. |
-| [docker-compose.yml](docker-compose.yml) + [.env.example](.env.example) | Local run on port 3000. |
-| [.github/workflows/deploy.yml](../../.github/workflows/deploy.yml) | Pipeline (repo root; `DEPLOY_ROOT` points here). |
-| [DEPLOYMENT.md](DEPLOYMENT.md) | EC2, security group, secrets, issues we hit, and bonus rollback. |
+1. Push to `main`.
+2. Actions runs `npm test`, then builds the image, tags it with the **commit SHA**, and pushes to GHCR.
+3. The same workflow SSHs to the instance (using repo secrets for host, user, and key) and runs `docker pull` / `docker run` for a container named `kora`, **port 80** on the host to **3000** in the app.
+4. After deploy, the script checks `http://127.0.0.1/health` on the box. If that fails, it tries to start the **previous** image again and the job still fails in Actions so the bad release is obvious. Details and how I tested that are in [DEPLOYMENT.md](DEPLOYMENT.md#9-bonus-rollback-in-the-pipeline).
+
+**Why I set it up this way**
+
+- Commit SHA on the image tag ties what runs in prod to a specific Git commit.
+- Tests run before the image is built for deploy in the same workflow.
+- GHCR is enough for the registry; I didn’t need ECR in GitHub for the push.
+- The rollback part was the optional bonus: catch a bad image after it lands, not only in tests.
 
 ---
 
-## Run locally
+## Repo layout
+
+| Path | What it is |
+|------|------------|
+| [app/](app/) | API code and Jest tests |
+| [Dockerfile](Dockerfile) | Image; non-root user; `PORT` |
+| [docker-compose.yml](docker-compose.yml) + [.env.example](.env.example) | Local run on 3000 |
+| [.github/workflows/deploy.yml](../../.github/workflows/deploy.yml) | Pipeline (repo root; `DEPLOY_ROOT` is this folder) |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | AWS, SG, secrets, and troubleshooting |
+
+---
+
+## Local run
 
 ```bash
 cd app && npm install && npm test
@@ -47,31 +49,29 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Open `http://localhost:3000/health` — expect `{"status":"ok"}`.
+`http://localhost:3000/health` should return `{"status":"ok"}`.
+
+**Metrics** — `GET /metrics` returns JSON (uptime in seconds, memory MB, Node version). To try it: open `http://localhost:3000/metrics` or `curl` that URL. On the deployed server, same path on port 80: `http://<public-ip>/metrics` (see [DEPLOYMENT.md](DEPLOYMENT.md#8-checking-it)).
 
 ---
 
-## Cloud checklist (before you submit)
+## Checklist
 
-- [ ] `docker compose up --build` works locally; `.env` is **not** committed.
-- [ ] GitHub **Actions** shows a **green** run on `main` (test → build+push → deploy).
-- [ ] `GET http://<ec2-public-ip>/health` returns **200** and JSON with `"ok"`.
-- [ ] **SSH** in the security group is **not** `0.0.0.0/0` (HTTP **may** be `0.0.0.0/0`).
-- [ ] No `.pem` or API tokens in Git — only in **GitHub → Settings → Secrets**.
-- [ ] [DEPLOYMENT.md](DEPLOYMENT.md) is filled in for your environment.
+- [ ] `docker compose up --build` works; `.env` is gitignored
+- [ ] Green run on `main` in GitHub Actions (test → build/push → deploy)
+- [ ] `GET` on my public `http://<ip>/health` returns 200 and `"ok"`
+- [ ] SSH is not `0.0.0.0/0` on 22; HTTP 80 can be from anywhere
+- [ ] No keys or tokens in the repo (only in GitHub Secrets)
+- [ ] [DEPLOYMENT.md](DEPLOYMENT.md) matches my real setup
 
-**Submission:** submit your fork’s URL via the [AmaliTech form](https://forms.cloud.microsoft.com/e/f3FF83LVz3) as required by the program.
+**Submission** — fork URL through the [AmaliTech form](https://forms.cloud.microsoft.com/e/f3FF83LVz3) as required.
 
 ---
 
-## Glossary (quick)
+## Terms (if useful)
 
-| Term | Meaning |
-|------|--------|
-| **CI** | Automated test/build on every change (here: GitHub Actions on `main`). |
-| **CD** | Delivering the build to a server (here: pull new image on EC2 and restart the container). |
-| **CIDR** | IP range used in firewall rules, e.g. `203.0.113.0/32` for a single address. |
-| **GHCR** | GitHub’s container registry; image URL `ghcr.io/<owner>/<repo>/...`. |
-| **Security group** | EC2’s inbound/outbound access rules. |
+- **CIDR** — e.g. `203.0.113.10/32` is “just this one IP” for a firewall rule.
+- **GHCR** — `ghcr.io/<user or org>/<image>:<tag>`.
+- **Security group** — AWS firewall rules on the instance.
 
-For longer explanations and the problems we hit in practice, see [DEPLOYMENT.md](DEPLOYMENT.md).
+For anything that broke in practice, see [DEPLOYMENT.md](DEPLOYMENT.md).
