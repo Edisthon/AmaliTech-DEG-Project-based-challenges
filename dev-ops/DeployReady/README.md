@@ -6,6 +6,8 @@ Kora’s Node API in [app/](app/) runs in Docker, gets built and tested on every
 
 [DEPLOYMENT.md](DEPLOYMENT.md) has the full setup (security group, secrets, checklists) with **inline screenshots** next to the section they match—GitHub Actions with the stack overview, the EC2 security group, SSH + Docker on the instance, rollback, and a failed deploy example.
 
+**Live app URL** — The API only defines **`/health`**, **`/metrics`**, and **`POST /data`**. The root path **`/`** is not set up, so a browser to `http://<public-ip>/` will show Express’s *Cannot GET /* — that is expected. For submission and checks, use **`http://<public-ip>/health`** (and `/metrics` if you want more detail).
+
 ---
 
 ## How the pipeline works

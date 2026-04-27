@@ -117,8 +117,9 @@ SSH into the host; then you can run `docker` like below.
 
 **From my laptop**
 
-- `http://<public-ip>/health` → `{"status":"ok"}`
+- `http://<public-ip>/health` → `{"status":"ok"}` — use this for the “deployed application” link in the submission form.
 - `http://<public-ip>/metrics` → JSON with `uptime_seconds`, `memory_mb`, `node_version` (same as local `http://localhost:3000/metrics` when the app is on 3000)
+- `http://<public-ip>/` (root) → there is no `GET /` route in the app, so you will see *Cannot GET /*; that is normal, not a failed deploy.
 
 Quick check:
 
